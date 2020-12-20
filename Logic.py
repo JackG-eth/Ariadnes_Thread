@@ -1,32 +1,36 @@
-import requests
-import json
 import re
-import argparse
 from companies_house.api import CompaniesHouseAPI
-ch = CompaniesHouseAPI('yLwgnyHvwlYxkbOBAoLEwsaEfVQ_a7kAuCUTNtSt')
+ch = CompaniesHouseAPI('_XsK-777wV5nXZwx2bgAaANU3kWTZ8p_1jWwarok')
+
 #_XsK-777wV5nXZwx2bgAaANU3kWTZ8p_1jWwarok
 #yLwgnyHvwlYxkbOBAoLEwsaEfVQ_a7kAuCUTNtSt
-
-# like to add checks to remove duplicate companies
+"""
+Retrieves information about a company from Companies House.
+Args:
+    company_no (str): Registered company number.
+Returns:
+    Information Companies House holds on the company.
+"""
 def get_company_info(company_no):
-    """
-    Retrieves information about a company from Companies House.
-    Args:
-        company_no (str): Registered company number.
-    Returns:
-        Information Companies House holds on the company.
-    """
-
     companyInfoDict = ch.get_company(company_no)
+    #check if the return dictionary is empty or not
     if(bool(companyInfoDict) == False):
         raise Exception("Company Does Not Exist!")
 
 
+    #initialise new dictonary to store only what we want to know (Editable)
     storedInfo = {}
+    """
+    Decided for my risk % the most important fields were:
+        has_been_liquidated:
+        has_insolvency_history:
+        registered_office_is_in_dispute:
+    """
     name = '';
     has_been_liquidated = 0
     has_insolvency_history = 0
     registered_office_is_in_dispute = 0
+    ## If it returns true value is set to 1
     for key, val in companyInfoDict.items():
         if(key == 'company_name'):
             name = val;
@@ -40,25 +44,22 @@ def get_company_info(company_no):
             if(val == True):
                 registered_office_is_in_dispute = 1;
 
+    # Store in dictionary object
     storedInfo["Company Name: "] = name
     storedInfo["has_been_liquidated: "] = has_been_liquidated
     storedInfo["has_insolvency_history: "] = has_insolvency_history
     storedInfo["registered_office_is_in_dispute: "] = registered_office_is_in_dispute
 
     return storedInfo
-    for key, val in storedInfo.items():
-        print(key,val)
-
 
 """
-Finds information about all companies associated through officers with the starting company.
-
+Calculates the RISK % score by calling the get_company_info function and performing some simple arithmatic
+    Definitely needs more data but is simple just a test showing how a certain field could be calculated
 Args:
     company_no (str):  The company number we want to search associated companies with.
-    depth (int): The depth of search in the graph of companies.
 
 Returns:
-    A list of information about all associated companies up to the given depth.
+    A given score for that particular company
 """
 def getCompanyScore(company_no):
     storedInfo = get_company_info(company_no)
@@ -76,6 +77,15 @@ def getCompanyScore(company_no):
     return (str((investPercentage/3)*100) + "%")
 
 
+
+"""
+Finds all of the companies a particular officer is associated with (depends on depth assigned)
+Args:
+    company_no (str):  The company number we want to search associated companies with.
+    depth (int): How far you want to delve into the database
+Returns:
+    A dictionary containing that officers associated information
+"""
 def get_Officers_Companies(OfficerID,company_no,depth):
     officerApp = ch.list_officers_appointments(OfficerID)
     comDictLenApp = len(officerApp['items'])
@@ -88,33 +98,43 @@ def get_Officers_Companies(OfficerID,company_no,depth):
             if(key == 'appointed_to'):
                 name = val['company_name']
                 company_id =val['company_number']
-                finalDict["Company Name: " + str(i)] = name
-                finalDict["Company ID: " + str(i)] = company_id
-                ## maybe comment out this line depending on levels to prevent exceeding call limit
-                finalDict["investPercentage: " + str(i)] = getCompanyScore(company_id)
-                if(company_no != company_id):
-                    if(depth > 1):
-                        finalDict["Company ID: " + str(i)] = get_associated_companies_info_by_company(company_id, depth-1)
-                    else:
-                        finalDict["Company ID: " + str(i)] = company_id
+                ## Might be worth removing this if statement (just ensures companies are not duplicated (endless loop))
+                if(company_id != company_no):
+                    finalDict["Company Name: " + str(i)] = name
+                    finalDict["Company ID: " + str(i)] = company_id
+                    ## maybe comment out this line depending on levels to prevent exceeding call limit
+                    finalDict["InvestmentRisk: " + str(i)] = getCompanyScore(company_id)
+                    if(company_no != company_id):
+                        if(depth > 1):
+                            finalDict["Company ID: " + str(i)] = get_associated_companies_info_by_company(company_id, depth-1)
+                        else:
+                            finalDict["Company ID: " + str(i)] = company_id
     return finalDict
 
 
-# List containing a list of that companies list?
+"""
+Finds all officers associated with a given company
+    # TODO: If i had more time i'd like to add a way to calculate sub risk scores when determining the overall investment RISK
+Args:
+    company_no (str):  The company number we want to search associated companies with.
+    depth (int): How far you want to delve into the database
+Returns:
+    A dictionary containing officers and their assoicated companeies and risk %
+"""
 def get_associated_companies_info_by_company(company_no,depth):
 
-    #company_info = get_company_info(company_no)
     companyDirectors = ch.list_company_officers(company_no)
     if(bool(companyDirectors) == False):
         raise Exception("Company Does Not Exist!")
-    #print(companyDirectors
-    ## somehow configure depth into this Add (later)
     comDictLen = len(companyDirectors['items'])
     storedInfo = {}
+
+    ## loop through all officers returned store their (name, OfficerID in sub Dictionary)
     for i in range(comDictLen):
         nameAndOfficerID = {}
         name = '';
         officerId = '';
+        # formatting required to exract their ID
         for key, val in companyDirectors['items'][i].items():
             if(key == 'name'):
                 name = val;
@@ -128,9 +148,13 @@ def get_associated_companies_info_by_company(company_no,depth):
         storedInfo["Director: " + str(i)] = nameAndOfficerID
 
 
-
     Final = {}
-    # For each officer get their companies
+
+
+    """
+    Simple recursive call here depending on depth
+    Essentially find all of the companies that officer is assocated with and call the entire logic again until the depth is equal to 1
+    """
     for key, val in storedInfo.items():
         officerName = val['Name: ']
         officerID = val['OfficerId: ']
